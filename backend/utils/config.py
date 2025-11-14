@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     slack_bot_token: str = Field(
         default="xoxb-change-me",
     )
+    slack_app_token: str = Field(
+        default="xapp-change-me",
+    )
+    slack_signing_secret: str = Field(
+        default="change-me",
+    )
     email_smtp: str = Field(
         default="smtp://user:pass@smtp.example.com:587",
     )
