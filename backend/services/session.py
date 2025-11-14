@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from backend.services.cache import cache_get, cache_set
 
@@ -20,7 +20,23 @@ DEFAULT_SESSION_STATE: Dict[str, Any] = {
     "available_slots": [],
     "extracted": {},
     "history": [],
+    "metadata": {},
 }
+
+PATIENT_FIELD_MAP: Dict[str, Tuple[str, str]] = {
+    "patient_name": ("patient", "name"),
+    "patient_phone": ("patient", "phone"),
+    "patient_email": ("patient", "email"),
+}
+
+PREFERENCE_FIELD_MAP: Dict[str, Tuple[str, str]] = {
+    "preferred_date": ("preferences", "date"),
+    "preferred_time_window": ("preferences", "time_window"),
+    "dentist_id": ("preferences", "dentist_id"),
+    "reason": ("preferences", "reason"),
+}
+
+HISTORY_MAX_ENTRIES = 10
 
 
 def _session_key(session_id: str) -> str:
@@ -75,9 +91,15 @@ def append_history(state: Dict[str, Any], role: str, content: str) -> None:
         "content": content,
     }
     state["history"].append(history_entry)
+    overflow = len(state["history"]) - HISTORY_MAX_ENTRIES
+    if overflow > 0:
+        del state["history"][:overflow]
 
 
-def merge_extracted_data(state: Dict[str, Any], extracted: Dict[str, Any]) -> None:
+def merge_extracted_data(
+    state: Dict[str, Any],
+    extracted: Dict[str, Any],
+) -> None:
     """Merge extracted LLM data into the session record."""
 
     if not extracted:
@@ -85,5 +107,42 @@ def merge_extracted_data(state: Dict[str, Any], extracted: Dict[str, Any]) -> No
 
     state.setdefault("extracted", {})
     for key, value in extracted.items():
-        if value is not None:
-            state["extracted"][key] = value
+        if value is None:
+            continue
+        state["extracted"][key] = value
+
+    _apply_structured_fields(state, extracted)
+
+
+def _apply_structured_fields(
+    state: Dict[str, Any],
+    extracted: Dict[str, Any],
+) -> None:
+    """Populate patient and preference sub-objects from extracted data."""
+
+    for field, (bucket, target_key) in PATIENT_FIELD_MAP.items():
+        if field not in extracted:
+            continue
+        state.setdefault(bucket, {})
+        state[bucket][target_key] = extracted[field]
+
+    for field, (bucket, target_key) in PREFERENCE_FIELD_MAP.items():
+        if field not in extracted:
+            continue
+        state.setdefault(bucket, {})
+        state[bucket][target_key] = extracted[field]
+
+
+def set_available_slots(
+    state: Dict[str, Any],
+    slots: List[Dict[str, Any]],
+) -> None:
+    """Store normalized available slots in the session payload."""
+
+    state["available_slots"] = slots or []
+
+
+def get_available_slots(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return any cached availability options for the session."""
+
+    return state.get("available_slots", [])

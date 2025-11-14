@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     openai_model: str = Field(
         default="gpt-4o-mini",
     )
+    openai_temperature: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+    )
+    openai_use_stub: bool = Field(
+        default=True,
+    )
     n8n_webhook_url: str = Field(
         default="https://n8n.example.com/webhook/appointment.booked",
     )
