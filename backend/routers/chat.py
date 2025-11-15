@@ -128,6 +128,12 @@ def _execute_action(
             metadata["booking_error"] = "slot_not_found"
         return
 
+    if action_type == "CONNECT_STAFF":
+        metadata["escalation_requested"] = True
+        if action_payload.get("explain"):
+            metadata["escalation_note"] = action_payload["explain"]
+        return
+
     if action_type == "SESSION_COMPLETE":
         metadata["session_closed"] = True
 

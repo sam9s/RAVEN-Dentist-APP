@@ -25,6 +25,38 @@ SYSTEM_PROMPT = dedent(
     """
 ).strip()
 
+ALLOWED_ACTIONS_TEXT = (
+    "Allowed action.type values: COLLECT_INFO, CHECK_AVAILABILITY, "
+    "AWAIT_SLOT_SELECTION, BOOK_SLOT, CONFIRMATION_PROMPT, SESSION_COMPLETE, "
+    "SMALL_TALK, CONNECT_STAFF. Do not use any other value."
+)
+
+JSON_RESPONSE_EXAMPLE = dedent(
+    """
+    Example JSON response:
+    {
+      "reply_to_user": "Hello — may I have your full name?",
+      "action": {
+        "type": "COLLECT_INFO",
+        "missing_fields": ["patient_name"],
+        "slot_index": null,
+        "slot_id": null,
+        "explain": null
+      },
+      "extracted": {
+        "patient_name": null,
+        "patient_phone": null,
+        "patient_email": null,
+        "preferred_date": null,
+        "preferred_time_window": null,
+        "dentist_id": null,
+        "reason": null
+      }
+    }
+    Do not wrap this JSON in markdown fences. Always fill unspecified keys with null.
+    """
+).strip()
+
 
 class LLMAction(BaseModel):
     """Structured action directive emitted by the LLM."""
@@ -37,6 +69,7 @@ class LLMAction(BaseModel):
         "CONFIRMATION_PROMPT",
         "SESSION_COMPLETE",
         "SMALL_TALK",
+        "CONNECT_STAFF",
     ]
     missing_fields: Optional[List[str]] = None
     slot_index: Optional[int] = None
@@ -141,13 +174,14 @@ class RAASLLMClient:
         text_chunks: List[str] = []
         for item in getattr(response, "output", []) or []:
             for part in getattr(item, "content", []) or []:
-                if getattr(part, "type", None) == "text":
+                if getattr(part, "type", None) == "output_text":
                     text_chunks.append(getattr(part, "text", ""))
 
         raw_text = "".join(text_chunks).strip()
         if not raw_text:
             raise ValueError("Empty response from OpenAI")
 
+        LOGGER.debug("OpenAI raw output (truncated): %s", raw_text[:500])
         return raw_text
 
     def _build_messages(
@@ -174,18 +208,23 @@ class RAASLLMClient:
             """
         ).strip().format(context=context, history=history)
 
+        instructions = "\n\n".join(
+            [developer_prompt, ALLOWED_ACTIONS_TEXT, JSON_RESPONSE_EXAMPLE]
+        )
+
+        user_payload = f"{instructions}\n{message_text or ''}".strip()
+
         messages = [
             {
                 "role": "system",
                 "content": [
-                    {"type": "text", "text": SYSTEM_PROMPT},
+                    {"type": "input_text", "text": SYSTEM_PROMPT},
                 ],
             },
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": developer_prompt},
-                    {"type": "text", "text": message_text or ""},
+                    {"type": "input_text", "text": user_payload},
                 ],
             },
         ]
@@ -228,9 +267,16 @@ class RAASLLMClient:
         try:
             payload = json.loads(raw_output)
         except json.JSONDecodeError as exc:
+            LOGGER.debug("Raw LLM output (truncated): %s", raw_output[:500])
             raise ValueError("LLM did not return valid JSON") from exc
 
-        return LLMResponse.model_validate(payload)
+        try:
+            return LLMResponse.model_validate(payload)
+        except ValidationError as exc:
+            LOGGER.debug(
+                "LLM payload failed validation: %s", json.dumps(payload)[:500]
+            )
+            raise
 
     def _stub_response(
         self,
@@ -374,6 +420,11 @@ class RAASLLMClient:
         extracted: Dict[str, Any] = {}
         lowered = message_text.lower()
 
+        comma_match = re.match(r"\s*([a-zA-Z][a-zA-Z\s]+),\s*(\+?\d[\d\s-]{6,})", message_text)
+        if comma_match:
+            extracted["patient_name"] = comma_match.group(1).strip().title()
+            extracted["patient_phone"] = re.sub(r"\D", "", comma_match.group(2))
+
         name_match = re.search(r"(?:my name is|i am)\s+([a-zA-Z\s]+)", lowered)
         if name_match:
             extracted["patient_name"] = name_match.group(1).strip().title()
@@ -385,6 +436,10 @@ class RAASLLMClient:
         email_match = re.search(r"[\w.%-]+@[\w.-]+", message_text)
         if email_match:
             extracted["patient_email"] = email_match.group(0)
+
+        if "patient_name" not in extracted:
+            if re.match(r"^[A-Za-z][A-Za-z\s]{2,40}$", message_text.strip()):
+                extracted["patient_name"] = message_text.strip().title()
 
         date_match = re.search(r"(20\d{2}-\d{2}-\d{2})", message_text)
         if date_match:
