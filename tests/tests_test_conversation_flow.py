@@ -12,7 +12,7 @@ import json
 from typing import Any, Dict, List
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 # === CONFIGURE THESE to match your project ===
 import_path_app = "backend.main:app"
@@ -68,6 +68,7 @@ async def test_conversation_happy_path(monkeypatch):
                 "patient_phone": "9999999999",
                 "preferred_date": "2025-11-15",
                 "preferred_time_window": "evening",
+                "service_type": "consultation",
             },
         ),
         LLMResponse(
@@ -83,7 +84,7 @@ async def test_conversation_happy_path(monkeypatch):
                 "Okay — sending your request to clinic. You’ll be notified when "
                 "doctor confirms."
             ),
-            action=LLMAction(type="BOOK_SLOT", slot_index=0),
+            action=LLMAction(type="BOOK_SLOT", slot_index=0, notes="patient selected option 1"),
             extracted={},
         ),
     ]
@@ -147,7 +148,9 @@ async def test_conversation_happy_path(monkeypatch):
         fake_book_appointment,
     )
 
-    async with AsyncClient(app=app, base_url="http://testserver") as ac:
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         # Step 1: greeting
         resp = await ac.post("/chat", json={"session_id": "s1", "channel": "slack", "user_id": "u1", "message_text": "Hi"})
         assert resp.status_code == 200

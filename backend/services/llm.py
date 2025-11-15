@@ -8,7 +8,7 @@ import re
 from textwrap import dedent
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, Field, ValidationError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -25,11 +25,14 @@ SYSTEM_PROMPT = dedent(
     """
 ).strip()
 
-ALLOWED_ACTIONS_TEXT = (
-    "Allowed action.type values: COLLECT_INFO, CHECK_AVAILABILITY, "
-    "AWAIT_SLOT_SELECTION, BOOK_SLOT, CONFIRMATION_PROMPT, SESSION_COMPLETE, "
-    "SMALL_TALK, CONNECT_STAFF. Do not use any other value."
-)
+ALLOWED_ACTIONS_TEXT = dedent(
+    """
+    Allowed action.type values: COLLECT_INFO, CHECK_AVAILABILITY,
+    AWAIT_SLOT_SELECTION, BOOK_SLOT, REQUEST_RESCHEDULE, CANCEL_BOOKING,
+    CONFIRMATION_PROMPT, SESSION_COMPLETE, SMALL_TALK, CONNECT_STAFF.
+    Do not use any other value.
+    """
+).strip()
 
 JSON_RESPONSE_EXAMPLE = dedent(
     """
@@ -41,7 +44,7 @@ JSON_RESPONSE_EXAMPLE = dedent(
         "missing_fields": ["patient_name"],
         "slot_index": null,
         "slot_id": null,
-        "explain": null
+        "notes": null
       },
       "extracted": {
         "patient_name": null,
@@ -49,6 +52,7 @@ JSON_RESPONSE_EXAMPLE = dedent(
         "patient_email": null,
         "preferred_date": null,
         "preferred_time_window": null,
+        "service_type": null,
         "dentist_id": null,
         "reason": null
       }
@@ -66,6 +70,8 @@ class LLMAction(BaseModel):
         "CHECK_AVAILABILITY",
         "AWAIT_SLOT_SELECTION",
         "BOOK_SLOT",
+        "REQUEST_RESCHEDULE",
+        "CANCEL_BOOKING",
         "CONFIRMATION_PROMPT",
         "SESSION_COMPLETE",
         "SMALL_TALK",
@@ -74,7 +80,14 @@ class LLMAction(BaseModel):
     missing_fields: Optional[List[str]] = None
     slot_index: Optional[int] = None
     slot_id: Optional[str] = None
-    explain: Optional[str] = None
+    notes: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("notes", "explain"),
+        serialization_alias="notes",
+    )
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 class LLMResponse(BaseModel):

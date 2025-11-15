@@ -33,6 +33,7 @@ PREFERENCE_FIELD_MAP: Dict[str, Tuple[str, str]] = {
     "preferred_date": ("preferences", "date"),
     "preferred_time_window": ("preferences", "time_window"),
     "dentist_id": ("preferences", "dentist_id"),
+    "service_type": ("preferences", "service_type"),
     "reason": ("preferences", "reason"),
 }
 

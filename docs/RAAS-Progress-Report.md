@@ -1,5 +1,5 @@
 # RAAS Project Progress Report
-*Status Date:* 2025-11-14
+*Status Date:* 2025-11-15
 
 ## Vision
 RAAS (Rapid Automation Appointment Scheduler) is the conversational front door for dentists in the RAVEN multiverse. It delivers a human-quality assistant that:
@@ -10,11 +10,12 @@ RAAS (Rapid Automation Appointment Scheduler) is the conversational front door f
 - Remains modular so additional channels, dentists, or automations can be onboarded without rewiring the core.
 
 ## Current Snapshot
-- **Environments:** Local Windows setup using FastAPI with Uvicorn, Redis (container), and a dedicated RAAS Postgres container (port 5433).
-- **Conversation Entry:** Unified `POST /chat` endpoint processes Slack traffic, persists session state, and returns user-facing replies.
-- **Slack Channel Adapter:** Socket Mode bot (Node.js) now relays Slack events to RAAS and echoes structured responses back to the channel.
-- **LLM Layer:** OpenAI client wrapper with deterministic fallback keeps conversations moving while full prompt choreography is finalized.
-- **Configuration & Tooling:** `.env` / `.env.example`, Makefile, requirements management, and pytest bootstrap are in place for local workflows.
+- **Environments:** Local Windows setup with FastAPI + Uvicorn, Redis (container), and dedicated Postgres (5433) remains the primary dev stack.
+- **Conversation Entry:** Unified `POST /chat` endpoint processes Slack traffic, manages Redis-backed sessions, executes action handlers, and returns structured replies.
+- **Slack Channel Adapter:** Socket Mode bot (Node.js) relays Slack events to RAAS and posts LLM-generated responses back to the channel.
+- **LLM Layer:** Live OpenAI Responses API integration now drives the receptionist dialog with JSON-schema validation and stub fallback, aligning to the new conversation playbook.
+- **Conversation Design:** `docs/RAAS_Conversation_flow.md` (solution architect spec) serves as the authoritative flow contract for persona, actions, and edge-case handling.
+- **Configuration & Tooling:** `.env` / `.env.example`, Makefile, requirements management, and pytest scaffold support local workflows.
 
 ## Architecture & Pipeline Overview
 1. **Slack → RAAS**: Socket Mode bot normalizes Slack messages (`session_id`, `channel`, `user_id`, `message_text`) and forwards them to FastAPI @ `/chat`.
@@ -29,43 +30,35 @@ RAAS (Rapid Automation Appointment Scheduler) is the conversational front door f
    - n8n hooks reserved for post-booking automations (email/Slack/CRM).
 
 ## Completed Work
-- **Design Alignment**: Captured RAAS requirements in `docs/RAAS-Design.md` and mirrored the prescribed architecture.
-- **Backend Foundations**:
-  - FastAPI app with `/health`, `/version`, and `/chat` endpoints plus router wiring.
-  - Redis-backed session management (`backend/services/session.py`).
-  - OpenAI-based LLM client with fallback (`backend/services/llm.py`).
-  - SQLAlchemy 2.0 models and DB session helpers.
-- **Infrastructure & Tooling**:
-  - `.env` + `.env.example` with complete key list.
-  - Makefile helpers for run/test/setup.
-  - Requirements pinned for backend services.
-- **Slack Integration**:
-  - Socket Mode bot loads RAAS env, hits `/chat`, and returns `reply_to_user` to Slack.
-  - Local smoke test validated end-to-end Slack ↔️ RAAS loop.
-- **Containers & Environment**:
-  - Dedicated Postgres (5433) and Redis containers launched and verified alongside local FastAPI server.
+- **Design Alignment:** Architectural blueprint captured in `docs/RAAS-Design.md`; new `docs/RAAS_Conversation_flow.md` adopted as canonical conversational spec.
+- **Backend Foundations:** FastAPI app with `/health`, `/version`, `/chat`; Redis session service; OpenAI LLM wrapper with fallback; SQLAlchemy 2.0 models and DB session helpers.
+- **Slack Integration:** Socket Mode bot relays Slack events to `/chat` and renders responses; end-to-end Slack ↔️ RAAS smoke tests executed successfully.
+- **Tooling & Environment:** `.env` variants, Makefile helpers, requirements management, and local Postgres/Redis containers operational.
 
-## In Progress / Expanding
-- Refining conversation handling to transition from fallback responses to fully dynamic LLM outputs.
-- Preparing cal.com adapter and business logic glue for real availability lookups and bookings.
+## In Progress / Alignment
+- Hardening prompt + schema enforcement so OpenAI responses stay within the expanded action contract (including CONNECT_STAFF and handoff paths).
+- Mapping backend state handling to the architected session FSM (NEW → GREETING → … → CLOSED) for production observability.
+- Wrapping up gap analysis between current implementation and conversation blueprint to guide development sprints.
 
 ## Next Planned Steps
-1. **Calendar Integration**
-   - Flesh out `calendar_service/cal_adapter.py` with real cal.com API calls.
-   - Extend `/chat` action handling paths for `CHECK_AVAILABILITY`, `AWAIT_SLOT_SELECTION`, and `BOOK_SLOT`.
-2. **Persistence & Data Workflows**
-   - Implement database write paths for patients, dentists, and appointments during the conversation lifecycle.
-   - Add Alembic migrations and seed data for clinic schedules.
-3. **Automation Hooks (n8n)**
-   - Define webhook payloads and wire `appointment.booked` events to n8n workflows for email + Slack notifications.
-4. **Testing & Observability**
-   - Add API-level tests for `/chat` path and session management.
-   - Instrument logging/metrics for conversation tracing (useful for Slack and future web channel).
-5. **Channel Expansion**
-   - Prototype lightweight web UI client to reuse `/chat` payload contract.
+1. **Prompt & Schema Expansion**
+   - Extend LLM schema literals (`REQUEST_RESCHEDULE`, `CANCEL_BOOKING`, etc.), extracted fields, and prompt few-shots per the conversation spec.
+   - Add stricter validation/reset logic for non-JSON responses and note handling.
+2. **Session State Machine & Persistence**
+   - Implement the architected `session.status` transitions and persist booking lifecycle metadata (PENDING → CONFIRMED) in Redis/Postgres.
+   - Normalize phone/email/timezone parsing with privacy-aware logging.
+3. **Real Scheduling Integration**
+   - Replace calendar stub with live cal.com + Google Calendar calls; handle host-confirmation workflow and slot-race recoveries.
+   - Process cal.com webhooks to update bookings, trigger n8n notifications, and keep session state in sync.
+4. **Reschedule & Cancellation Flows**
+   - Implement backend handlers for `REQUEST_RESCHEDULE`/`CANCEL_BOOKING`, including verification prompts and policy windows.
+   - Surface escalation tickets when staff intervention is required.
+5. **Testing & Observability**
+   - Expand pytest suite with reschedule/cancel/escalation scenarios and integration tests around the live calendar adapter.
+   - Deliver QA checklist + debug endpoints to inspect sessions/appointments during manual testing.
 
 ## Backlog / Future Considerations
-- Integrate production-grade OpenAI prompt/response enforcement with JSON schema validation.
-- Enrich Redis sessions with slot caching and guardrails for multi-user concurrency.
-- Add rate limiting and Slack slash command support for staff escalations.
-- Harden deployment pipeline (Docker compose, CI/CD, infra-as-code) once core flows stabilize.
+- Channel expansion (web/WhatsApp) once Slack flow is production-ready.
+- Rate limiting, audit logging, and staff tooling (slash commands) for escalations.
+- Deployment hardening (CI/CD, IaC) after calendar integration stabilizes.
+- Advanced analytics: conversation success metrics, sentiment detection, and feedback loops for ongoing tuning.

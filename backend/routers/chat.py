@@ -130,8 +130,9 @@ def _execute_action(
 
     if action_type == "CONNECT_STAFF":
         metadata["escalation_requested"] = True
-        if action_payload.get("explain"):
-            metadata["escalation_note"] = action_payload["explain"]
+        note = action_payload.get("notes") or action_payload.get("explain")
+        if note:
+            metadata["escalation_note"] = note
         return
 
     if action_type == "SESSION_COMPLETE":
