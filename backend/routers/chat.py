@@ -11,11 +11,13 @@ from pydantic import BaseModel, Field
 from backend.services.llm import RAASLLMClient
 from backend.services.session import (
     append_history,
+    apply_booking_status,
     get_available_slots,
     load_session,
     merge_extracted_data,
     save_session,
     set_available_slots,
+    update_status_for_action,
 )
 from backend.utils.config import get_settings
 from calendar_service.cal_adapter import CalComAdapter
@@ -30,7 +32,13 @@ llm_client = RAASLLMClient(
     temperature=settings.openai_temperature,
     use_stub=settings.openai_use_stub,
 )
-calendar_client = CalComAdapter(api_key=settings.cal_api_key)
+calendar_client = CalComAdapter(
+    api_key=settings.cal_api_key,
+    event_type_id=settings.cal_event_type_id,
+    calendar_id=settings.cal_calendar_id,
+    timezone=settings.cal_timezone,
+    use_stub=settings.cal_use_stub,
+)
 
 
 class ChatRequest(BaseModel):
@@ -73,12 +81,13 @@ def handle_chat_message(payload: ChatRequest) -> ChatResponse:
     append_history(session_state, "assistant", llm_result.reply_to_user)
 
     action_type = llm_result.action.type
-    session_state["status"] = action_type.lower()
+    update_status_for_action(session_state, action_type)
     metadata = session_state.setdefault("metadata", {})
     metadata["last_action"] = action_type
 
+    booking_context: Optional[Dict[str, Any]] = None
     try:
-        _execute_action(
+        booking_context = _execute_action(
             action_type=action_type,
             session_state=session_state,
             action_payload=llm_result.action.model_dump(),
@@ -86,6 +95,9 @@ def handle_chat_message(payload: ChatRequest) -> ChatResponse:
     except Exception as exc:  # pragma: no cover - defensive
         LOGGER.error("Action handler failed: action=%s error=%s", action_type, exc)
         metadata["action_error"] = str(exc)
+
+    if booking_context:
+        apply_booking_status(session_state, booking_context)
 
     save_session(payload.session_id, session_state)
 
@@ -108,7 +120,7 @@ def _execute_action(
     action_type: str,
     session_state: Dict[str, Any],
     action_payload: Dict[str, Any],
-) -> None:
+) -> Optional[Dict[str, Any]]:
     """Perform backend side-effects for the given action."""
 
     metadata = session_state.setdefault("metadata", {})
@@ -118,25 +130,29 @@ def _execute_action(
         slots = calendar_client.check_availability(preferences)
         set_available_slots(session_state, slots)
         metadata["available_slot_count"] = len(slots)
-        return
+        return None
 
     if action_type == "BOOK_SLOT":
         booking = _book_selected_slot(session_state, action_payload)
         if booking:
             metadata["latest_booking"] = booking
+            metadata.pop("booking_error", None)
         else:
-            metadata["booking_error"] = "slot_not_found"
-        return
+            metadata.setdefault("booking_error", "slot_not_found")
+        return booking
 
     if action_type == "CONNECT_STAFF":
         metadata["escalation_requested"] = True
         note = action_payload.get("notes") or action_payload.get("explain")
         if note:
             metadata["escalation_note"] = note
-        return
+        return None
 
     if action_type == "SESSION_COMPLETE":
         metadata["session_closed"] = True
+        return None
+
+    return None
 
 
 def _book_selected_slot(
@@ -162,5 +178,11 @@ def _book_selected_slot(
         return None
 
     patient = session_state.get("patient", {})
+    if not patient.get("email"):
+        session_state.setdefault("metadata", {})[
+            "booking_error"
+        ] = "missing_patient_email"
+        return None
+
     booking = calendar_client.book_appointment(slot=slot, patient=patient)
     return booking

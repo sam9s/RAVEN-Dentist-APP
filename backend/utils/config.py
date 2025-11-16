@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     cal_api_key: str = Field(
         default="change-me",
     )
+    cal_event_type_id: int | None = Field(
+        default=None,
+    )
+    cal_calendar_id: str | None = Field(
+        default=None,
+    )
+    cal_timezone: str = Field(
+        default="Asia/Kolkata",
+    )
+    cal_use_stub: bool = Field(
+        default=True,
+    )
     slack_bot_token: str = Field(
         default="xoxb-change-me",
     )

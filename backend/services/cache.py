@@ -21,3 +21,9 @@ def cache_get(key: str) -> Optional[str]:
     """Get a value from Redis by key."""
 
     return redis_client.get(name=key)
+
+
+def cache_delete(key: str) -> int:
+    """Delete a value from Redis by key."""
+
+    return int(redis_client.delete(key))

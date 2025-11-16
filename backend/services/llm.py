@@ -8,7 +8,7 @@ import re
 from textwrap import dedent
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +22,28 @@ SYSTEM_PROMPT = dedent(
     * Timezone: Asia/Kolkata. Dates must be ISO (YYYY-MM-DD).
     * Output: ALWAYS return a single JSON object matching the schema. No prose.
     * On serialization error: return {"error": "INVALID_JSON"}.
+    """
+).strip()
+
+DATE_HANDLING_GUIDANCE = dedent(
+    """
+    Date handling requirements:
+    - Always collect appointment dates in full ISO format (YYYY-MM-DD).
+    - If session.metadata.preferred_date_error == "invalid_format", inform the
+      user their date was invalid and request a correct YYYY-MM-DD date.
+    - If session.metadata.preferred_date_error == "past_date", tell the user the
+      date is in the past and ask for a future date in YYYY-MM-DD format.
+    """
+).strip()
+
+CONTACT_REQUIREMENTS = dedent(
+    """
+    Contact details:
+    - patient_phone and patient_email must be captured before booking.
+    - If session.patient.email is missing or
+      session.metadata.booking_error == "missing_patient_email", ask for the
+      email before proceeding.
+    - If patient details seem unclear, confirm them explicitly.
     """
 ).strip()
 
@@ -86,8 +108,7 @@ class LLMAction(BaseModel):
         serialization_alias="notes",
     )
 
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class LLMResponse(BaseModel):
@@ -222,7 +243,13 @@ class RAASLLMClient:
         ).strip().format(context=context, history=history)
 
         instructions = "\n\n".join(
-            [developer_prompt, ALLOWED_ACTIONS_TEXT, JSON_RESPONSE_EXAMPLE]
+            [
+                developer_prompt,
+                CONTACT_REQUIREMENTS,
+                DATE_HANDLING_GUIDANCE,
+                ALLOWED_ACTIONS_TEXT,
+                JSON_RESPONSE_EXAMPLE,
+            ]
         )
 
         user_payload = f"{instructions}\n{message_text or ''}".strip()
@@ -327,6 +354,8 @@ class RAASLLMClient:
             missing_fields.append("patient_name")
         if not proposed_patient.get("phone"):
             missing_fields.append("patient_phone")
+        if not proposed_patient.get("email"):
+            missing_fields.append("patient_email")
 
         has_preferences = bool(
             proposed_preferences.get("date")
@@ -337,6 +366,45 @@ class RAASLLMClient:
         selection = self._extract_slot_selection(message_text)
 
         metadata.setdefault("stub_state", "initial")
+        date_error = metadata.get("preferred_date_error")
+        if date_error and not proposed_preferences.get("date"):
+            if date_error == "past_date":
+                reply = (
+                    "That date has already passed. Please share a future date in "
+                    "YYYY-MM-DD format."
+                )
+            else:
+                reply = (
+                    "I need the appointment date in YYYY-MM-DD format, including "
+                    "the year. Could you share it again?"
+                )
+            action = LLMAction(
+                type="COLLECT_INFO",
+                missing_fields=["preferred_date"],
+            )
+            return LLMResponse(
+                reply_to_user=reply,
+                action=action,
+                extracted=extracted,
+            )
+
+        booking_error = metadata.get("booking_error")
+        if booking_error == "missing_patient_email" or not proposed_patient.get(
+            "email"
+        ):
+            reply = (
+                "I need an email address to confirm your appointment. "
+                "Could you please share it?"
+            )
+            action = LLMAction(
+                type="COLLECT_INFO",
+                missing_fields=["patient_email"],
+            )
+            return LLMResponse(
+                reply_to_user=reply,
+                action=action,
+                extracted=extracted,
+            )
 
         if selection is not None and available_slots:
             index = max(0, min(len(available_slots) - 1, selection))
